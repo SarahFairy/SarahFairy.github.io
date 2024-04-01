@@ -1,0 +1,91 @@
+---
+title: "Prediction of Activity Quality"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+In this document, we are going to predict the way in which some individuals perform an exercise. To define how the exercise is performed, the factor variable `classe` is used. It can take one of the values from A to E. 
+
+## Data Manipulation and Exploratory Analysis
+First, we'll import both the training and the test data from source.
+```{r, message=FALSE, warning=FALSE, cache=TRUE}
+library(readr)
+df_train <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+df_test <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+```
+
+Next, we are going to perform some exploratory analysis. It is visible that there is a variable `new_window` which contains a summary of all records within the respective time window. Only where this variable is `yes`, the summary variables `var`, `stddev`, `kurtosis`, `amplitude`, `min`, `max`, `skewness` and `avg` are populated. As we want to focus on each single record, i.e. those records where the summary variables are `N/A`, we get rid off these columns and the summary records. Also, the summary variables are `N/A` in the testing data set, hence they are not required for prediction. Finally, we filter out variables with a near zero variance (parameter is 1:7 as measure variables start at index 8).
+
+```{r, message=FALSE}
+library(dplyr)
+library(caret)
+df_train_v1 <- select(df_train, !contains("var") & !contains("stddev") & !contains("kurtosis") & 
+                        !contains("amplitude") & !contains("min") & !contains("max") & 
+                        !contains("skewness") & !contains("avg"))
+df_train_v1$classe <- as.factor(df_train_v1$classe)
+df_train_v1 <- filter(df_train_v1, new_window == 'no')
+df_train_v2 <- df_train_v1[, -c(nearZeroVar(df_train_v1), 1:7), with=FALSE]
+```
+
+The same data manipulation needs to be applied to the testing data set:
+
+```{r, message=FALSE}
+library(dplyr)
+library(caret)
+df_test_v1 <- select(df_test, !contains("var") & !contains("stddev") & !contains("kurtosis") & 
+                        !contains("amplitude") & !contains("min") & !contains("max") & 
+                        !contains("skewness") & !contains("avg"))
+df_test_v1 <- filter(df_test_v1, new_window == 'no')
+df_test_v2 <- df_test_v1[, -c(nearZeroVar(df_test_v1), 1:7), with=FALSE]
+```
+
+## Prediction Model
+As the test data set doesn't contain the `classe` variable, we have to split the train data set into another train and test data set to, first, train our model and, second, to check how well it works. 
+```{r}
+inTrain <- createDataPartition(y=df_train_v2$classe, p=0.75, list=FALSE)
+training <- df_train_v2[inTrain,]
+testing <- df_train_v2[-inTrain,]
+```
+
+For our model, we will use the random forest approach as it is highly effective. However, running the model will be computationally ineffiecient, hence we set up a parallel working environment as described in this [GitHub article](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md). Also, after testing some various resampling methods, I decided to use k-fold cross-validation with 5 folds. Increasing the folds to 10 resulted in only a slightly higher model accuracy, but deteriorated processing performance. Our model is defined as per below:
+
+```{r, message=FALSE, cache=TRUE}
+library(caret)
+library(parallel)
+library(doParallel)
+set.seed(294)
+cluster <- makeCluster(detectCores()-1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method="cv", number=5, allowParallel = TRUE)
+fit <- train(classe~., data=training, method="rf", trControl=fitControl)
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+After the model has run, we will predict the results from our model `fit`.
+```{r}
+set.seed(294)
+pred <- predict(fit, newdata=testing)
+confusionMatrix(pred, testing$classe)
+```
+
+From the confusion matrix, we can see that the model accuracy is `>0.99`. The out-of-sample error is calculated as `1 - model accuracy`.
+
+```{r}
+# manually calculate accuracy and out-of-sample error
+mean(pred==testing$classe)    # accuracy
+1-mean(pred==testing$classe)  # out-of-sample error
+```
+
+As the accuracy of our model is high enough, we will use our model `fit` to predict the `classe` variable on the initial testing data set.
+
+```{r}
+pred_final <- predict(fit, newdata=df_test_v2)
+pred_final
+```
+
+Using our model resulted in 20 out of 20 correct predictions.
